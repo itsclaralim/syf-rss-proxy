@@ -1,65 +1,48 @@
-import fs from "fs";
-import fetch from "node-fetch";
+import fs from 'fs';
+import fetch from 'node-fetch';
+import { XMLParser } from 'fast-xml-parser';
 
-const CONFIG = {
-  RSS_URL: "https://syfine.tistory.com/rss",
-  MAX_PAGES: 60
-};
+const BLOG_RSS = 'https://syfine.tistory.com/rss';
+const MAX_PAGES = 60; // ✅ 페이지당 10개 → 최대 600개 게시물
+const OUTPUT_FILE = 'rss.json';
 
-async function fetchAllRSS() {
-  let allItems = [];
-  for (let i = 1; i <= CONFIG.MAX_PAGES; i++) {
-    const url = `${CONFIG.RSS_URL}?page=${i}`;
-    console.log("🔹 Fetching", url);
-    const res = await fetch(url);
-    const xml = await res.text();
-    if (!xml.includes("<item>")) break;
+const parser = new XMLParser({ ignoreAttributes: false });
 
-    const parsed = parseRSS(xml);
-    allItems.push(...parsed);
+async function fetchAll() {
+  const all = [];
+  for (let i = 1; i <= MAX_PAGES; i++) {
+    const url = `${BLOG_RSS}?page=${i}`;
+    console.log(`📡 Fetching page ${i} ...`);
+
+    try {
+      const res = await fetch(url);
+      const xml = await res.text();
+
+      if (!xml.includes('<item>')) break; // 페이지 없음 → 종료
+
+      const parsed = parser.parse(xml);
+      const items = parsed.rss.channel.item || [];
+
+      // 배열 아닌 단일 아이템 처리
+      const arr = Array.isArray(items) ? items : [items];
+
+      for (const item of arr) {
+        all.push({
+          title: item.title,
+          link: item.link,
+          desc: item.description,
+          cats: item.category ? (Array.isArray(item.category) ? item.category : [item.category]) : [],
+          pub: item.pubDate
+        });
+      }
+    } catch (err) {
+      console.warn(`⚠️ Page ${i} fetch error:`, err);
+      break;
+    }
   }
-  return allItems;
+
+  console.log(`✅ Total ${all.length} posts fetched`);
+  fs.writeFileSync(OUTPUT_FILE, JSON.stringify(all, null, 2));
 }
 
-function parseRSS(xml) {
-  const items = [];
-  const blocks = xml.split("<item>").slice(1);
-  for (const block of blocks) {
-    const title = getTag(block, "title");
-    const link = getTag(block, "link");
-    const desc = getTag(block, "description");
-    const pubDate = getTag(block, "pubDate");
-    const cats = [...block.matchAll(/<category>([\s\S]*?)<\/category>/g)]
-      .map((m) => decodeCDATA(m[1]).trim())
-      .filter(Boolean);
-    items.push({ title, link, desc, cats, pubDate });
-  }
-  return items;
-}
-
-function getTag(xml, tag) {
-  const m = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "i"));
-  return m ? decodeCDATA(m[1]) : "";
-}
-
-function decodeCDATA(s = "") {
-  return s
-    .replace(/<!\[CDATA\[(.*?)\]\]>/gs, "$1")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
-}
-
-(async () => {
-  const items = await fetchAllRSS();
-  const output = {
-    source: "syfine.tistory.com",
-    total: items.length,
-    updated: new Date().toISOString(),
-    items
-  };
-  fs.writeFileSync("rss.json", JSON.stringify(output, null, 2));
-  console.log(`✅ ${items.length} posts saved to rss.json`);
-})();
+await fetchAll();
